@@ -1,0 +1,99 @@
+name: Destroy
+concurrency:
+  #cancel-in-progress: true
+  group: ${{ github.ref }}-${{ github.workflow }}
+permissions:
+  contents: read
+  id-token: write ## enable aws role-based authentication
+  deployments: write
+on:
+  delete:
+    branches: ['!main']
+  pull_request: ## on pull request
+    branches: [main]
+    types: [closed]
+  workflow_dispatch: ## manual execution
+    inputs:
+        environment:
+          type: environment
+        aws_region:
+          type: string
+          default: us-east-2
+  workflow_run: #This event will only trigger a workflow run if the workflow file is on the default branch.
+    workflows: ["Pipeline"] #todo - on requessed too..?
+    branches: [main]
+    types:
+      - completed
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_ROLE_TO_ASSUME:
+        required: true
+    inputs:
+      environment:
+        required: false
+        type: string
+      aws_region:
+        required: false
+        type: string
+        default: us-east-2
+
+env:
+  AWS_REGION: us-east-2
+  SAM_CLI_TELEMETRY: 0
+jobs:
+  teardown-setup: ## setup Node
+    if: github.ref == 'refs/heads/main' && (github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v1
+        if: hashFiles(' package-lock.json') != ''
+        with:
+          node-version: 14.x
+      - uses: actions/setup-python@v2
+      - uses: aws-actions/setup-sam@v1
+
+  teardown-development:
+    runs-on: ubuntu-latest
+    environment: development
+    if: ${{ github.ref != 'refs/heads/main' &&  github.event.workflow_run.conclusion == 'success' }}
+    needs: teardown-setup
+    steps:
+    - uses: actions/checkout@v2
+    - uses: aws-actions/setup-sam@v1
+    - uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    - run: |
+          STACK_NAME=$(echo ${{ github.repository }}-${{ github.ref_name }} | cut -d '/' -f2-|sed "s@/@-@"|sed "s@_@-@")
+          aws cloudformation describe-stacks --stack-name ${{env.STACK_NAME}} || exit 0
+          sam delete --debug --region ${{ env.AWS_REGION }} --stack-name ${{env.STACK_NAME}} --no-prompts
+  teardown-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      # cancel-in-progress: true
+      group: staging
+    if: github.ref == 'refs/heads/main' && (github.event.workflow_run.conclusion == 'success')
+    needs: [teardown-setup]
+    steps:
+    - uses: actions/checkout@v2
+    - uses: aws-actions/setup-sam@v1
+    - uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+      with:
+        aws-region: ${{ env.AWS_REGION }}
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    - run: |
+        STACK_NAME=$(echo ${{ github.repository }}-staging | cut -d '/' -f2-|sed "s@/@-@"|sed "s@_@-@")
+        aws cloudformation describe-stacks --stack-name $STACK_NAME || exit 0
+        sam delete --region ${{ env.AWS_REGION }} --stack-name $STACK_NAME --config-env ${{ inputs.ENVIRONMENT || 'default' }}  --no-prompts

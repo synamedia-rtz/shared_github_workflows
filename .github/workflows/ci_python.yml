@@ -17,6 +17,11 @@ on:
       AWS_ROLE_TO_ASSUME:
         required: true
     inputs:
+      python_version:
+        description: Python version
+        default: '3.x'
+        required: false
+        type: string
       runs-on:
         description: Executer Platform
         default: 'ubuntu-latest'
@@ -34,7 +39,12 @@ jobs:
         with:
           token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
           submodules: recursive
-      - name: AWS | Credentials ## Use role when running on github.com
+      - name: SETUP | Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ inputs.python_version || '3.x'  }}
+          architecture: 'x64'
+      - name: SETUP | AWS Credentials ## Use role when running on github.com
         uses: aws-actions/configure-aws-credentials@v1.6.1
         with:
           aws-region: ${{ env.AWS_REGION }}
@@ -42,6 +52,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-duration-seconds: 7200
+      - name: BUILD | Instal dependencies
+        run: |
+          python3 -m venv env && source env/bin/activate
+          python3 -m pip install --upgrade pip
+          [[ -s requirements.txt ]] && python3 -m pip install -r requirements.txt
+          python3 -m pip list
       - name: BUILD | Test
         id: test
         continue-on-error: true #${{ fromJSON(github.event.inputs.continue) }}
@@ -50,8 +66,8 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          bash scripts/run.sh install
-          bash scripts/run.sh test
+          . env/bin/activate && python3 -m pip install pytest pytest-html
+          pytest --pyargs --junitxml=report/tests-report.xml --html=report/tests-report.html --self-contained-html -vv -s
       - run: |
           echo '::warning:: WARNING !!!! Test Failed'
         if: steps.test.outcome == 'failure'
@@ -62,14 +78,10 @@ jobs:
           name: CI tests results
           path: report/tests-*.xml
           reporter: java-junit
-      - name: Publish Unit Test Results
-        uses: EnricoMi/publish-unit-test-result-action/composite@v1
-        continue-on-error: true
-        with:
-          files: 'report/*.xml'
-      - name: Artifacts
+      - name: Archive test results
+        if: ${{ always() }}
         uses: actions/upload-artifact@v3
-        if: ${{ success() }} || ${{ failure() }} && {{ !env.ACT }} ## not supported in act
         with:
-          name: build-artifacts
-          path: 'report/**'
+          name: Test reports
+          path: |
+            'report/**'
