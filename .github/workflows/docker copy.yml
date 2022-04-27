@@ -1,0 +1,178 @@
+name: Dockerize
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
+on:
+  workflow_dispatch: ## manual execution
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_ROLE_TO_ASSUME:
+        required: true
+
+jobs:
+  build:
+    permissions:
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: GIT | Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          submodules: recursive
+      ## Buildx (faster parallel build of layers)
+      - name: Docker | Setup Buildx
+        id: docker_buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          install: true
+      ## Cache
+      - name: Docker | Setup Cache
+        id: docker_cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ runner.tool_cache }}/buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-
+      ## Metadata
+      - name: INFO | Set Version
+        id: set_version
+        run: |
+          : ${VERSION:="$([[ -s version.txt && "${GITHUB_REF##*/}" =~ ^(master|main)$ ]] && cat version.txt || echo $(git rev-parse --abbrev-ref HEAD)_${{github.run_id}}_${{github.run_attempt}})"}
+          echo "::set-output name=version::$VERSION"
+      - name: Docker | Setup Metadata
+        id: docker_metadata
+        uses: docker/metadata-action@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          images: |
+            ghcr.io/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=sha,prefix=,format=long
+            type=sha,prefix={{branch}}-,format=short,suffix=-{{date 'YYYYMMDDSS'}}
+            type=edge,enable=true,priority=700,prefix=,suffix=,branch=$repo.default_branch
+            type=semver,pattern={{version}},value=${{ steps.set_version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.set_version.outputs.version }}
+            type=semver,pattern={{major}},value=${{ steps.set_version.outputs.version }}
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+            type=ref,event=tag
+          flavor: |
+            latest=auto
+
+      ## Build
+      - ## Docker build local (github.com)
+        name: Docker | Build (${{ github.repository }})
+        uses: docker/build-push-action@v2
+        if: ${{ !env.ACT }}
+        with:
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          tags: ${{ github.repository }}:${{ github.sha }}
+          load: true
+      - ## Docker build local with ACT (no need code fetch)
+        name: Docker | Build (${{ github.repository }}) ACT
+        if: ${{ env.ACT }}
+        run: |
+          docker buildx build --output=type=docker -t ${{ github.repository }}:${{ github.sha }} .
+          docker images
+
+      ## Login Registry
+      - name: Docker | Login (GitHub-ghcr) registry
+        id: docker_login_ghcr
+        uses: docker/login-action@v1
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      - name: Docker | Build-Push (GitHub-ghcr)
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          push: ${{ !env.ACT }}
+          builder: ${{ steps.docker_buildx.outputs.name }}
+          tags: ${{ steps.docker_metadata.outputs.tags }}
+          labels: ${{ steps.docker_metadata.outputs.labels }}
+          cache-from: type=local,src=${{ runner.tool_cache }}/buildx-cache
+          cache-to: type=local,dest=${{ runner.tool_cache }}/buildx-cache-new
+
+  publish_to_aws:
+    if: github.ref == 'refs/heads/main' #&&  github.event.pull_request.merged
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      ## AWS Cred
+      - name: AWS | Credentials ## Use role when running on github.com
+        if: ${{ !env.ACT }}
+        uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: AWS | Credentials ACT ## Use local credentials when funning locally
+        if: ${{ env.ACT }}
+        uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      ## Login Registry
+      - name: AWS | Login Registry
+        id: docker_login_ecr
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          registry: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+      - name: AWS | Registry (ECR) Login ## ${{ steps.docker_login_ecr.outputs.registry }}
+        id: aws_ecr_login
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: AWS | Push to Registry (ECR)
+        id: aws_push_to_ecr
+        run: |
+          SRC_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          ##owner = ${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.vendor'] }}
+          ##name = ${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.title'] }}
+
+          TARGET_IMAGE=${{ steps.aws_ecr_login.outputs.registry }}/${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.title'] }}:${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
+          aws ecr create-repository --image-scanning-configuration scanOnPush=true --repository-name $owner/$name && echo ok || : 2> /dev/null
+          docker pull $SRC_IMAGE
+          docker image tag $SRC_IMAGE $TARGET_IMAGE
+          docker image push --all-tags $TARGET_IMAGE
+
+  publish_to_do:
+    if: github.ref == 'refs/heads/main' #&&  github.event.pull_request.merged
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: DO | Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: DO | Login Registry
+        run: doctl registry login --expiry-seconds 600
+      - name: DO |  Push to Registry
+        run: |
+          SRC_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          TARGET_IMAGE=registry.digitalocean.com/${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.title'] }}:${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
+          docker pull $SRC_IMAGE
+          docker image tag $SRC_IMAGE $TARGET_IMAGE
+          docker image push --all-tags $TARGET_IMAGE

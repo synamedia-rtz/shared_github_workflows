@@ -1,0 +1,287 @@
+name: Build-Test-Tag-Release Manual
+
+permissions:
+  id-token: write
+  contents: read  
+
+on:
+  workflow_dispatch:  
+    inputs:
+      debug:
+        required: false
+        default: 'false'
+        description: Execute with more verbosity
+
+env:
+  AWS_REGION: us-east-2
+  ACTIONS_STEP_DEBUG: false # ${{ github.event.inputs.debug || false }}
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GIT | Checkout
+        uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.CI_GITHUB_PAT }}
+          submodules: recursive          
+      - name: AWS | Credentials ACT
+        if: ${{ env.ACT }}
+        uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      - name: AWS | Credentials
+        if: ${{ !env.ACT }}
+        uses: aws-actions/configure-aws-credentials@e21f7333e801ca751f058cc52de17f0ee6e1da6f
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }} 
+          aws-region: ${{ env.AWS_REGION }}
+  build:
+    needs: [setup]
+    timeout-minutes: 60
+    runs-on: ubuntu-latest 
+    continue-on-error: true  
+    container: ## Build and test on contenerized enviroment (more accurate then vm)
+      image: python:3.7-buster
+      volumes: [ "GITHUB_WORKSPACE:/home/root" ]
+      env: 
+        LOG_LEVEL: INFO 
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: BUILD | Dependencies
+        run: |  
+          export PATH="/opt/venv/bin:$PATH"
+          python -m venv /opt/venv && source /opt/venv/bin/activate
+          python -m pip install --upgrade pip -r requirements.txt
+      - name: BUILD | Test
+        run: |
+          source /opt/venv/bin/activate
+          python -m pip install pytest
+          pytest -v **/test/* --junitxml=test-reports/report.xml
+      - name: BUILD | Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: build-artifacts
+          path: 'test-reports/report.xml'
+          
+  # job1:
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     url: ${{ steps.step1.outputs.url }} # map step output to job output
+  #   steps:
+  #     - id: step1
+  #       name: send url to other job
+  #       run: echo "::set-output name=url::https://google.com"
+  # job2:
+  #   runs-on: ubuntu-latest
+  #   needs: job1
+  #   steps:
+  #     - run: echo hiiiii ${{ needs.job1.outputs.url }} 
+
+  job1:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.info.outputs.version }} 
+      version3: ${{ steps.info.outputs.version3 }}       
+    steps:      
+      # - id: checkout
+      #   uses: actions/checkout@v2
+      #   with:
+      #      token: ${{ secrets.GITHUB_TOKEN }}
+      #      fetch-depth: 0
+      - run: |
+          echo heloooooooooooooooooooooooooooo
+          echo tag=1234 >> $GITHUB_ENV
+      - id: info        
+        run: |
+          echo "::set-output name=version::1234"      
+          echo "::set-output name=version3::${{ env.tag }} "          
+      - run: |
+          echo ${{ env.tag }}  
+          echo "--------------"
+          echo $GITHUB_ENV
+          cat /var/run/act/workflow/envs.txt 
+          echo "--------------"
+
+  job2:
+    runs-on: ubuntu-latest
+    needs: job1
+    steps:
+      - run: |
+          echo hiiiii ${{ needs.job1.outputs.version }} ${{ needs.job1.outputs.version3 }}           
+          echo hoooooyyyyy ${{ env.tag }}
+          
+
+  version:    
+    runs-on: ubuntu-latest         
+    outputs:        
+      version: ${{ steps.info.outputs.version }}
+      
+    steps:
+      - uses: actions/checkout@v2
+        with:
+        #  token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: INFO | Set Version
+        id: info
+        run: |          
+          : ${VERSION:="$([[ -s version.txt && "${GITHUB_REF##*/}" =~ ^(master|main)$ ]] && cat version.txt || echo $GITHUB_RUN_ID)"}          
+          echo "::set-output name=version::$VERSION"
+  
+  tag:
+    runs-on: ubuntu-latest
+    # environment: dev
+    # concurrency: deploy_dev    
+    #if: ${{ github.ref == 'refs/heads/main' }}    
+    permissions:
+      packages: write
+    needs: info
+    steps:
+      - run: |
+          echo "++++++++++++++++++++++++++++++++++++++++++++"
+          echo "Tagging ${{ needs.info.outputs.version }}"
+      # - name: GIT | Tag
+      #   uses: actions/github-script@v5        
+      #   with:
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     script: |
+      #       try {
+      #         const deleteRes = await github.rest.git.deleteRef({ owner: context.repo.owner, repo: context.repo.repo,ref:'tags/v'+ "${{ needs.info.outputs.version }}"})   
+      #       } catch (e) { console.log(e) }
+      #       try {
+      #         const createRes = await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo,ref: 'refs/tags/v'+ "${{ needs.info.outputs.version }}",sha: context.sha})
+      #         console.log(createRes.status,createRes.data)   
+      #       } catch (e) { console.log(e) }
+  release:    
+    runs-on: ubuntu-latest
+    #if: ${{ github.event_name == 'push' }} #if: "!startsWith(github.event.head_commit.message, '[RELEASE]')"    
+    #environment: prod
+    #concurrency: deploy_prod
+    permissions:
+      packages: write    
+    needs: [tag]
+    steps:                  
+      - name: Release
+        id: create_release
+        uses: softprops/action-gh-release@v1        
+        with:
+           tag_name: v${{ needs.info.outputs.version }}
+           #body_path: ${{ github.workspace }}/CHANGELOG.md
+           token: ${{ secrets.GITHUB_TOKEN }}
+           #files: test-reports/report.xml
+           draft: true           
+           prerelease: false
+      - run: echo ${{ steps.create_release.outputs.upload_url }}
+     
+  # deploy:
+  #   name: deploy
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: python:3.7-buster
+  #     volumes: [ "GITHUB_WORKSPACE:/home/root" ]
+  #   strategy:
+  #     matrix:
+  #       env: [dev, prod]
+  #   env:
+  #     AWS_ACCESS_KEY_ID: ${{ secrets[format('{0}_AWS_ACCESS_KEY_ID', matrix.env)] }}
+  #     AWS_SECRET_ACCESS_KEY: ${{ secrets[format('{0}_AWS_SECRET_ACCESS_KEY', matrix.env)] }}
+  #     AWS_ROLE_TO_ASSUME: ${{ secrets[format('{0}AWS_ROLE_TO_ASSUME', matrix.env)] }}
+  #   steps:
+  #     - run: echo hello #aws s3 ls # just something random to see that authentication works
+ 
+      
+      # jobs:
+#   on-success:
+#     runs-on: ubuntu-latest
+#     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+#     steps:
+#       - name: Tag
+#         uses: actions/github-script@v5
+#         with:
+#           github-token: ${{ secrets.CI_GITHUB_PAT }}
+#           script: |
+#             : ${TAG:="$([[ -s version.txt && "${GITHUB_REF##*/}" =~ ^(master|main)$ ]] && cat version.txt || echo $TAG_NAME_BRANCHED)"}
+#             git branch --show-current
+#             # console.log(context)
+#             # github.git.createRef({
+#             #   owner: context.repo.owner,
+#             #   repo: context.repo.repo,
+#             #   ref: "refs/tags/$TAG",
+#             #   sha: context.sha
+#             # })
+#   # on-failure:
+#   #   runs-on: ubuntu-latest
+#   #   if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+#   #   steps:
+      
+
+
+
+      # workflow1:      
+  #   uses: synamedia-rtz/research_core/.github/workflows/test.yml@main
+  # workflow2:      
+  #   uses: .github/workflows/test.yml@main
+  # workflow3:      
+  #   needs: build   
+  #   runs-on: ubuntu-latest      
+  #   steps:
+  #     - uses: synamedia-rtz/research_core/.github/workflows/test.yml@main
+  # tag:        
+  #   environment: dev    
+  #   runs-on: ubuntu-latest    
+  #   needs: [setup]
+  #   permissions:
+  #     packages: write
+  #   steps:
+  #     - name: GIT | Shallow Checkout
+  #       uses: actions/checkout@v2        
+  #       with:
+  #         token: ${{ secrets.GITHUB_TOKEN }}
+  #         fetch-depth: 0
+  #     - name: INFO | Set Version
+  #       id: set_tag_name
+  #       run: |                    
+  #         echo "::set-output name=tag::v$([[ -s version.txt && "${GITHUB_REF##*/}" =~ ^(master|main)$ ]] && cat version.txt || echo $GITHUB_RUN_ID)"
+  #     - name: GIT | Tag
+  #       uses: actions/github-script@v5        
+  #       with:
+  #         github-token: ${{ secrets.GITHUB_TOKEN }}
+  #         script: |      
+  #           try {
+  #             deleteRes = await github.rest.git.deleteRef({ owner: context.repo.owner, repo: context.repo.repo,ref:'tags/v'+ "${{ needs.setup.outputs.version }}"})   
+  #           } finally {
+  #             createRes = await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo,ref: 'refs/tags/v'+ "${{ needs.setup.outputs.version }}",sha: context.sha})              
+  #           }      
+  # release:
+  #   #if: "!startsWith(github.event.head_commit.message, '[RELEASE]')"
+  #   #!steps.stepid.outputs.value
+  #   environment: prod
+  #   needs: [tag]
+  #   #concurrency: deploy_prod
+  #   runs-on: ubuntu-latest
+  #   steps:      
+  #     - name: GIT | Checkout
+  #       uses: actions/checkout@v2
+  #       with:
+  #         token: ${{ secrets.GITHUB_TOKEN }}
+  #         fetch-depth: 1
+  #     #TODO : bump verison  
+  #     - name: INFO | Set Version
+  #       id: set_tag_name
+  #       run: |          
+  #         : ${VERSION:="$([[ -s version.txt && "${GITHUB_REF##*/}" =~ ^(master|main)$ ]] && cat version.txt || echo $GITHUB_RUN_ID)"}
+  #         echo "::set-output name=tag::v$VERSION"                
+  #     - name: Release
+  #       id: create_release
+  #       uses: softprops/action-gh-release@v1            
+  #       with:
+  #              tag_name: v${{ needs.setup.outputs.version }}
+  #              body_path: ${{ github.workspace }}/CHANGELOG.md
+  #              token: ${{ secrets.GITHUB_TOKEN }}
+  #              files: test-reports/report.xml
+  #              draft: true           
+  #              prerelease: false
+   

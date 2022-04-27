@@ -1,0 +1,37 @@
+name: Release Drafter
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch: ## manual execution
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            Changes in this Release
+            - First Change
+            - Second Change
+          draft: true
+          prerelease: true
+      #- uses: release-drafter/release-drafter@v5
+      #  # (Optional) specify config name to use, relative to .github/. Default: release-drafter.yml
+      #  # with:
+      #  #   config-name: my-config.yml
+      #  #   disable-autolabeler: true
+      #  env:
+      #    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,107 @@
+name: Dockerize
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+on:
+  workflow_dispatch: ## manual execution
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_ROLE_TO_ASSUME:
+        required: true
+      AWS_ACCOUNT_ID:
+        required: true
+env:
+  AWS_REGION: 'us-east-2' #${{ inputs.aws_region || 'us-east-2' }}
+jobs:
+  build:
+    permissions:
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      ## Checkout
+      - name: GIT | Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          submodules: recursive
+      ## Buildx (faster parallel build of layers)
+      - name: Docker | Setup Buildx
+        id: docker_buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          install: true
+      ## Cache
+      - name: Docker | Setup Cache
+        id: docker_cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ runner.tool_cache }}/buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-buildx-
+      ## AWS Cred
+      - name: AWS | Credentials ## Use role when running on github.com
+        uses: aws-actions/configure-aws-credentials@v1.6.1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-duration-seconds: 7200
+      ## Login Registry
+      - name: AWS | Login Registry
+        id: docker_login_ecr
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          registry: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+      ## Generate Registry's Repository
+      - name: Docker | Create Repository (AWS ECR)
+        run: |
+          aws ecr create-repository --image-scanning-configuration scanOnPush=true \
+            --repository-name ${{ github.repository }} && echo ok ||: 2> /dev/null
+      ## Fetch version string
+      - name: INFO | Set Version
+        id: set_version
+        if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        run: |
+          : ${BUILD_ID:=echo $(git rev-parse --abbrev-ref HEAD)_${{github.run_id}}_${{github.run_attempt}} }
+          : ${VERSION:="$([[ -s version.txt ]] && cat version.txt || echo $BUILD_ID )"}
+          echo "::set-output name=version::$VERSION"
+      ## Set Docker metadata (https://github.com/docker/metadata-action)
+      - name: Docker | Setup Metadata Master
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          images: |
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.vendor=${{ github.repository_owner }}
+          tags: |
+            type=sha,prefix=,format=long
+            type=semver,priority=4,pattern={{version}},value=${{ steps.set_version.outputs.version }},enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=semver,priority=3,pattern={{major}}.{{minor}},value=${{ steps.set_version.outputs.version }},enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=semver,priority=2,pattern={{major}},value=${{ steps.set_version.outputs.version }},enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,priority=1,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=ref,event=branch
+      ## Build & Push
+      - name: Docker | Build-Push
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          builder: ${{ steps.docker_buildx.outputs.name }}
+          tags: ${{ steps.meta.outputs.tags || steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels || steps.meta.outputs.labels }}

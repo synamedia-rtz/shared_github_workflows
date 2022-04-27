@@ -1,0 +1,42 @@
+name: Static Analysis
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      PAT:
+        required: true
+
+jobs:
+  megalinter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GIT | Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Analysis | Mega-Linter
+        id: linter
+        #uses: megalinter/megalinter@v5
+        continue-on-error: true
+        uses: megalinter/megalinter/flavors/python@v5.12.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          IGNORE_GENERATED_FILES: true
+          DISABLE: COPYPASTE,SPELL
+          ADDITIONAL_EXCLUDED_DIRECTORIES: .github, .semversioner
+      - run: |
+          echo '::warning:: WARNING !!!! Linter Failed'
+        if: steps.test.outcome == 'failure'
+
+      - name: Archive production artifacts
+        if: ${{ success() }} || ${{ failure() }} && {{ !env.ACT }} ## not supported in act
+        uses: actions/upload-artifact@v3
+        with:
+          name: Mega-Linter reports
+          path: |
+            report/mega-linter.log

@@ -1,0 +1,75 @@
+name: CI
+
+permissions:
+  id-token: write
+  contents: read
+  checks: write
+on:
+  workflow_dispatch: ## manual execution
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_ROLE_TO_ASSUME:
+        required: true
+    inputs:
+      runs-on:
+        description: Executer Platform
+        default: 'ubuntu-latest'
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-2
+    steps:
+      - name: GIT | Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          submodules: recursive
+      - name: AWS | Credentials ## Use role when running on github.com
+        uses: aws-actions/configure-aws-credentials@v1.6.1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-duration-seconds: 7200
+      - name: BUILD | Test
+        id: test
+        continue-on-error: true #${{ fromJSON(github.event.inputs.continue) }}
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          bash scripts/run.sh install
+          bash scripts/run.sh test
+      - run: |
+          echo '::warning:: WARNING !!!! Test Failed'
+        if: steps.test.outcome == 'failure'
+      - name: BUILD | Test Report
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: CI tests results
+          path: report/tests-*.xml
+          reporter: java-junit
+      - name: Publish Unit Test Results
+        uses: EnricoMi/publish-unit-test-result-action/composite@v1
+        continue-on-error: true
+        with:
+          files: 'report/*.xml'
+      - name: Artifacts
+        uses: actions/upload-artifact@v3
+        if: ${{ success() }} || ${{ failure() }} && {{ !env.ACT }} ## not supported in act
+        with:
+          name: build-artifacts
+          path: 'report/**'

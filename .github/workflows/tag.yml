@@ -1,0 +1,40 @@
+name: Tag
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      PAT:
+        required: true
+  #pull_request:
+  #  types: [closed]
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      packages: write
+    steps:
+      - name: GIT | Shallow Checkout
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: INFO | Set Version
+        id: set_tag_name
+        run: |
+          : ${BUILD_ID:=echo $(git rev-parse --abbrev-ref HEAD)_${{github.run_id}}_${{github.run_attempt}} }
+          : ${TAG:="$([[ -s version.txt ]] && cat version.txt || echo $BUILD_ID )"}
+          echo $TAG
+          echo "::set-output name=tag::$TAG"
+      - name: GIT | Tag
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              deleteRes = await github.rest.git.deleteRef({ owner: context.repo.owner, repo: context.repo.repo,ref:'tags/'+ "${{ steps.set_tag_name.outputs.tag }}"})
+            } finally {
+              createRes = await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo,ref: 'refs/tags/'+ "${{ steps.set_tag_name.outputs.tag }}",sha: context.sha})
+            }

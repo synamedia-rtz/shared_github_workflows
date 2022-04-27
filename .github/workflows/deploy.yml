@@ -1,0 +1,66 @@
+name: Deploy
+
+permissions:
+  contents: read
+  id-token: write ## enable aws role-based authentication
+  deployments: write
+  packages: write
+
+on:
+  workflow_dispatch: ## manual execution
+    inputs:
+      environment:
+        type: environment
+        required: false
+        default: development
+        description: environment
+  workflow_call: ## call from upper workflow
+    inputs:
+      environment:
+        required: false
+        type: string
+    secrets:
+      PAT:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_ROLE_TO_ASSUME:
+        required: true
+      AWS_ACCOUNT_ID:
+        required: true
+env:
+  AWS_REGION: 'us-east-2'
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.ENVIRONMENT || 'development' }}
+    steps:
+      ## AWS Cred
+      - name: AWS | Credentials ## Use role when running on github.com
+        uses: aws-actions/configure-aws-credentials@v1.6.1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-duration-seconds: 7200
+      ## Login Registry
+      - name: AWS | Login Registry
+        id: docker_login_ecr
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          registry: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+      ## Pull and Tag with Environment
+      - name: Docker | Tag with Environment
+        env:
+          REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: |
+          SRC_IMAGE=${{ env.REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+          TARGET_IMAGE=${{ env.REGISTRY }}/${{ github.repository }}:${{ inputs.ENVIRONMENT}}
+          docker pull $SRC_IMAGE
+          docker image tag $SRC_IMAGE $TARGET_IMAGE
+          docker image push $TARGET_IMAGE

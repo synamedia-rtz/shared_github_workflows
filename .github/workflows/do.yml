@@ -1,0 +1,101 @@
+##https://github.com/do-community/example-doctl-action
+
+#jobs:
+#  run:
+#    runs-on: ubuntu-latest
+#    env:
+#      AWS_REGION: us-east-2
+#      DROPLET: 188.166.80.9
+#    steps:
+#      - name: DO | Install doctl
+#        uses: digitalocean/action-doctl@v2
+#        with:
+#          token: ${{ secrets.DO_ACCESS_TOKEN }}
+#      - name: DO | Login
+#        run: doctl registry login --expiry-seconds 600
+
+#      - name: DO | Cleanup
+#        run: if [ ! -z "$(doctl registry repository list | grep "$(echo $IMAGE_NAME)")" ]; then doctl registry repository delete-manifest $(echo $IMAGE_NAME) $(doctl registry repository list-tags $(echo $IMAGE_NAME) | grep -o "sha.*") --force; else echo "No repository"; fi
+
+#      - name: Push image to DigitalOcean Container Registry
+#        run: docker push registry.digitalocean.com/asb/static-example:$(echo $GITHUB_SHA | head -c7)
+
+name: DigitalOCean
+permissions:
+  id-token: write
+  contents: read
+  checks: write
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version'
+        required: true
+
+  workflow_call: ## call from upper workflow
+    secrets:
+      PAT:
+        required: true
+      DIGITALOCEAN_ACCESS_TOKEN:
+        required: true
+env:
+  IMAGE_NAME: 'calypso-agent'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Docker | Login (GitHub-ghcr) registry
+        id: docker_login_ghcr
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          password: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          registry: registry.digitalocean.com
+
+      - name: Docker | Build-Push (GitHub-ghcr)
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+            DIGITALOCEAN_ACCESS_TOKEN = ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          push: ${{ !env.ACT }}
+          builder: ${{ steps.docker_buildx.outputs.name }}
+          tags: ${{ steps.docker_metadata.outputs.tags }}
+          labels: ${{ steps.docker_metadata.outputs.labels }}
+          cache-from: type=local,src=${{ runner.tool_cache }}/buildx-cache
+          cache-to: type=local,dest=${{ runner.tool_cache }}/buildx-cache-new
+
+      #- name: Install doctl
+      #  uses: digitalocean/action-doctl@v2
+      #  with:
+      #    token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      #- name: Log in to DigitalOcean Container Registry with short-lived credentials
+      #  run: doctl registry login --expiry-seconds 600
+      #- name: Remove old
+      #  run: if [ ! -z "$(doctl registry repository list | grep "$(echo $IMAGE_NAME)")" ]; then doctl registry repository delete-manifest $(echo $IMAGE_NAME) $(doctl registry repository list-tags $(echo $IMAGE_NAME) | grep -o "sha.*") --force; else echo "No repository"; fi
+      - name: Push image to DigitalOcean Container Registry
+        run: docker push $(echo $REGISTRY)/$(echo $IMAGE_NAME):$(echo $GITHUB_SHA | head -c7)
+
+      - name: Deploy to Digital Ocean droplet via SSH action
+        uses: appleboy/ssh-action@v0.1.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME || root}}
+          key: ${{ secrets.SSHKEY }}
+          #passphrase: ${{ secrets.PASSPHRASE }}
+          envs: IMAGE_NAME,REGISTRY,{{ secrets.DIGITALOCEAN_ACCESS_TOKEN }},GITHUB_SHA
+          script: |
+            SRC_IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }}
+            TARGET_IMAGE=${{ steps.aws_ecr_login.outputs.registry }}/${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.title'] }}:${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
+            docker pull $SRC_IMAGE
+            docker image tag $SRC_IMAGE $TARGET_IMAGE
+            # docker login -u ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }} -p ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }} registry.digitalocean.com
+            # docker stop $(echo $IMAGE_NAME)
+            #docker rmi -f $(echo $IMAGE_NAME)
+            #docker pull (echo $IMAGE_NAME) 
+            #docker run -d \
+            #--restart always \
+            #--name $(echo $IMAGE_NAME) \
+            #$(echo $REGISTRY)/$(echo $IMAGE_NAME):$(echo $GITHUB_SHA | head -c7)
