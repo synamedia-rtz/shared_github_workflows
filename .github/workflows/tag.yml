@@ -35,6 +35,8 @@ jobs:
           script: |
             try {
               deleteRes = await github.rest.git.deleteRef({ owner: context.repo.owner, repo: context.repo.repo,ref:'tags/'+ "${{ steps.set_tag_name.outputs.tag }}"})
+            } catch (error) {
+                  console.log(error.message); 
             } finally {
               createRes = await github.rest.git.createRef({ owner: context.repo.owner, repo: context.repo.repo,ref: 'refs/tags/'+ "${{ steps.set_tag_name.outputs.tag }}",sha: context.sha})
             }
