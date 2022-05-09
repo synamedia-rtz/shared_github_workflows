@@ -33,7 +33,7 @@ jobs:
       ## Buildx (faster parallel build of layers)
       - name: Docker | Setup Buildx
         id: docker_buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
         with:
           install: true
       ## Cache
