@@ -80,7 +80,7 @@ jobs:
       ## Set Docker metadata (https://github.com/docker/metadata-action)
       - name: Docker | Setup Metadata Master
         id: meta
-        uses: docker/metadata-action@v3
+        uses: docker/metadata-action@v4
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           images: |

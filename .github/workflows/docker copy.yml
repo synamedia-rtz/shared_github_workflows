@@ -52,7 +52,7 @@ jobs:
           echo "::set-output name=version::$VERSION"
       - name: Docker | Setup Metadata
         id: docker_metadata
-        uses: docker/metadata-action@v3
+        uses: docker/metadata-action@v4
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           images: |
