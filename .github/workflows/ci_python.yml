@@ -72,7 +72,7 @@ jobs:
           echo '::warning:: WARNING !!!! Test Failed'
         if: steps.test.outcome == 'failure'
       - name: BUILD | Test Report
-        uses: dorny/test-reporter@v1
+        uses: synamedia-rtz/github_actions_test_reporter@v1
         if: success() || failure()
         with:
           name: CI tests results
