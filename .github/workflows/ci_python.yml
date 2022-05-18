@@ -67,12 +67,12 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           . env/bin/activate && python3 -m pip install pytest pytest-html
-          pytest --pyargs --junitxml=report/tests-report.xml --html=report/tests-report.html --self-contained-html -vv -s
+          pytest --pyargs --junitxml=report/tests-report.xml --html=report/tests-report.html --self-contained-html -vvv -s
       - run: |
           echo '::warning:: WARNING !!!! Test Failed'
         if: steps.test.outcome == 'failure'
       - name: BUILD | Test Report
-        uses: synamedia-rtz/github_actions_test_reporter@v1
+        uses: synamedia-rtz/github_action_test_reporter@v1
         if: success() || failure()
         with:
           name: CI tests results
