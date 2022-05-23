@@ -75,7 +75,7 @@ jobs:
       ## Build
       - ## Docker build local (github.com)
         name: Docker | Build (${{ github.repository }})
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v3
         if: ${{ !env.ACT }}
         with:
           secrets: |
@@ -100,7 +100,7 @@ jobs:
 
       - name: Docker | Build-Push (GitHub-ghcr)
         id: docker_build
-        uses: docker/build-push-action@v2
+        uses: docker/build-push-action@v3
         with:
           secrets: |
             GIT_AUTH_TOKEN=${{ secrets.PAT || secrets.GITHUB_TOKEN }}
