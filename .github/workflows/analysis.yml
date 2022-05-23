@@ -23,7 +23,7 @@ jobs:
         id: linter
         #uses: megalinter/megalinter@v5
         continue-on-error: true
-        uses:  synamedia-rtz/github_action_megalinter/flavors/python@v5.12.0
+        uses:  synamedia-rtz/github_action_megalinter/flavors/python@v5.13.0
         env:
           GITHUB_TOKEN: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
           IGNORE_GENERATED_FILES: true
