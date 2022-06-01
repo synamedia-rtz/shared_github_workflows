@@ -60,7 +60,7 @@ jobs:
           python3 -m pip list
       - name: BUILD | Check Format
         id: format
-        uses: psf/black@main
+        uses: synamedia-rtz/github_action_black@main
         with:
           args: ". --check"
         continue-on-error: true #${{ fromJSON(github.event.inputs.continue) }}
