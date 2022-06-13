@@ -40,7 +40,7 @@ jobs:
     environment: ${{ inputs.ENVIRONMENT || 'development' }}
     steps:
       - uses: actions/checkout@v2 #required for caching
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
       - uses: aws-actions/setup-sam@v1
       - uses: actions/setup-node@v2
         if: hashFiles(' package-lock.json') != ''

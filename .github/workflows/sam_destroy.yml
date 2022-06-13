@@ -55,7 +55,7 @@ jobs:
         if: hashFiles(' package-lock.json') != ''
         with:
           node-version: 14.x
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
       - uses: aws-actions/setup-sam@v1
 
   teardown-development:

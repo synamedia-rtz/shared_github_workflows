@@ -40,7 +40,7 @@ jobs:
           token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
           submodules: recursive
       - name: SETUP | Python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: ${{ inputs.python_version || '3.x'  }}
           architecture: 'x64'
